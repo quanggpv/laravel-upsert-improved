@@ -1,123 +1,57 @@
-Hi guys, 
+# Tối ưu Performance cho tính năng Upsert trong Laravel
 
-Phần repo này mình muốn chia sẽ một chút về phần cải thiện performance cho tính năng "upsert" của laravel - đã có từ phiên bản laravel v8.
+Bài viết này chia sẻ kinh nghiệm về việc cải thiện hiệu suất khi xử lý dữ liệu lớn với tính năng `upsert` của Laravel (v8+).
 
-Về cách upsert của laravel thực thi, thì họ đang dùng câu SQL: 
-
-`
+## 1. Cơ chế hoạt động của Laravel Upsert
+Laravel thực thi lệnh `upsert` thông qua câu lệnh SQL:
+```sql
 INSERT INTO ... ON DUPLICATE KEY UPDATE ...
-`
+```
+**Ưu điểm:** Gộp lệnh `INSERT` và `UPDATE` vào một lần gọi duy nhất dựa trên khóa chính hoặc unique key, giúp code gọn gàng hơn.
 
-đại loại sẽ gọi câu insert, nếu trùng key (khóa chính hoặc cặp khóa chính) sẽ bắt event "DUPLICATE KEY" rồi update record - thay vì thường phải viết 1 câu insert và update, thì dùng câu này để gộp cho gọn
+---
 
-**Vậy vấn đề gặp phải là gì ?
+## 2. Vấn đề & Giải pháp tạm thời
 
-- Giả sử bạn upsert với lượng lớn data, 10k record chẳng hạn, thì sẽ có 10k query => vậy không ổn tí nào nhỉ?
+### Vấn đề thường gặp
+Khi xử lý lượng data lớn (ví dụ: 10,000 records), nếu không kiểm soát tốt cách thực thi, số lượng query có thể tăng vọt, gây ảnh hưởng nghiêm trọng đến hiệu suất hệ thống.
 
-**Giải pháp (tạm thời)
+### Giải pháp "Batching" (Tạm thời)
+Thay vì dùng `upsert` mặc định nếu cảm thấy nó chậm, chúng ta có thể tách thành 2 câu query lớn:
+1. **Batch Insert:** Lọc các ID chưa tồn tại và gộp lại để chèn một lần.
+2. **Batch Update:** Sử dụng cấu trúc `UPDATE...CASE...WHEN` để cập nhật đồng loạt các bản ghi cũ.
 
-- Thay vì phải tạo ra 10k query, mình sẽ cố gắng giảm bớt nó thành 2 câu query (nhưng không hẳn sẽ nhanh hơn trong trường hợp update)
-  + 1 câu dùng batch insert: logic là sẽ tìm những id không có trong db rồi gộp chúng lại, phần còn lại là để update
-  
-  + 1 câu dùng batch update: update...case...when
+**So sánh logic Update:**
+*   **Cách 1 (Nhiều query đơn):** `UPDATE table SET field = val WHERE id = x`. Hệ thống phải kiểm tra điều kiện $N$ lần cho $N$ bản ghi ($N^2$ checks).
+*   **Cách 2 (Một query gộp):** Sử dụng `CASE WHEN`. Hệ thống chỉ cần duyệt bảng một lần ($N$ lần check).
 
-- Use case hay dùng: import data từ file
+---
 
-** Vậy upsert của laravel dùng ổn trong trường hợp nào?
+## 3. Phân tích Performance & Thực tế (Cập nhật mới)
 
-- Khi bạn nghĩ luồng logic của bạn đang làm có ít dữ liệu (chỉ có 5-10 records) thì dùng có sẵn của laravel cho nhanh, cũng không đáng kể
-- và câu upsert (SQL trên) có hổ trợ nhiều key (khóa chính và cặp khóa chính) 
+Qua quá trình test thực tế và đối sánh, chúng ta có những kết quả bất ngờ:
 
-** Một vài lưu ý
-- Hiện tại code của mình chỉ support 1 field, bạn có thể fork rồi code thêm nhé :D
-- Đã work trên MYSQL, còn lại mình chưa test :D
-- Bạn có thể chỉ dùng trait SqlBulkUpdatable nếu bạn chỉ muốn dùng cho bulk update, hoặc wantsUpsertQuery cho cả update và insert
+> [!IMPORTANT]
+> **Kết quả Benchmark:**
+> 1. `upsert` mặc định của Laravel chạy **nhanh gấp 10 lần** so với cách dùng `UPDATE CASE WHEN`.
+> 2. `upsert` mặc định chạy **nhanh gấp đôi** so với cách sử dụng "Dynamic Temporary Table" (Join với block VALUES).
 
-*Diễn giải khác
+### Khi nào nên dùng Laravel Upsert?
+*   **Dữ liệu nhỏ (5-10 records):** Hiệu suất không chênh lệch đáng kể, dùng mặc định cho nhanh và tiện.
+*   **Dữ liệu lớn (Bulk Import):** Laravel `upsert` xử lý cực tốt vì nó đã hỗ trợ bulk insert/update trong một câu query duy nhất (nếu truyền vào array dữ liệu).
+*   **Hỗ trợ đa khóa:** Hoạt động tốt với cả Primary Key và Unique Key phức hợp (Composite keys).
 
-Update record bằng nhiều câu query (1)
+---
 
-hay một câu query thì tốt hơn (2) ?
+## 4. Lưu ý & Tài nguyên bổ sung
 
----------------------------------------------------------------------------------------------
+### Lưu ý kỹ thuật
+*   Hiện tại các Trait hỗ trợ chỉ mới được test ổn định trên **MySQL**.
+*   Các giải pháp tùy chỉnh (`SqlBulkUpdatable`, `wantsUpsertQuery`) đang hỗ trợ tối ưu cho 1 field cụ thể.
 
-query (1)
-<br>
-<br>
-  update table
+### Công cụ hỗ trợ
+Nếu bạn quan tâm đến việc tối ưu sâu hơn cho Batch Update, mình đã đóng gói một package tại đây:
+👉 **[quanggpv/fast-batch-update](https://github.com/quanggpv/fast-batch-update)**
 
-  set some_field = val_1
-
-  where id = 1
-
-  <br>
-
-  update table
-
-  set some_field = val_2
-
-  where id = 2
-
-  ...
-
-  update table
-
-  set some_field = val_n
-
-  where id = 3
-
----------------------------------------------------------------------------------------------
-
-query (2)
-
-`
-  update table
-  set some_field = CASE WHEN ....
-`
-
----------------------------------------------------------------------------------------------
-Khi dùng (1), bạn phải check n điều kiện trong n lần update<br>
-=> n^2 lần
-<br>
-Khi dùng (2), bạn chỉ check n điều kiện chỉ trong 1 lần gọi table<br>
-=> n lần
-<br><br>
-
-
-Cập nhật bài viết 
-
-[06/11]
-
-- Mình test thiếu trường hợp nên nghĩ upsert chưa hổ trợ bulk update, bulk insert
-
-- upsert chỉ hổ trợ primary key hoặc unique key
-
-=> upsert của laravel chỉ chạy một câu cho toàn bộ câu insert và update
-
-=> upsert của laravel sau khi dùng một cách đúng đắn và test lại thì nhanh gấp chục lần cách dùng "UPDATE CASE WHEN" và
-
-gấp đôi với cách dùng "dynamic temporary table"
-
-`(
-  UPDATE date_test
-  join
-    SELECT *
-    FROM (
-        VALUES
-        ROW....
-      ) AS temp_table(id, name, code)
-    ) as temp_data
-  on ...
-  set ...
-)`
-
-https://dev.mysql.com/.../8.0/en/insert-on-duplicate.html
-
-[8/11]
-
-- Mình vừa có viết thêm package để dùng cho bulk update, nếu bạn cần có thể xem tại
-
-https://github.com/quanggpv/fast-batch-update
-
-
-Thanks for reading, happy coding
+---
+*Cảm ơn các bạn đã đọc, hy vọng chia sẻ này giúp ích cho dự án của bạn!*
