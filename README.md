@@ -1,57 +1,57 @@
-# Tối ưu Performance cho tính năng Upsert trong Laravel
+# Optimizing Performance for Laravel's Upsert Feature
 
-Bài viết này chia sẻ kinh nghiệm về việc cải thiện hiệu suất khi xử lý dữ liệu lớn với tính năng `upsert` của Laravel (v8+).
+This article shares experiences in improving performance when handling large datasets using the `upsert` feature in Laravel (v8+).
 
-## 1. Cơ chế hoạt động của Laravel Upsert
-Laravel thực thi lệnh `upsert` thông qua câu lệnh SQL:
+## 1. How Laravel Upsert Works
+Laravel executes the `upsert` command using the following SQL statement:
 ```sql
 INSERT INTO ... ON DUPLICATE KEY UPDATE ...
 ```
-**Ưu điểm:** Gộp lệnh `INSERT` và `UPDATE` vào một lần gọi duy nhất dựa trên khóa chính hoặc unique key, giúp code gọn gàng hơn.
+**Advantage:** Combines `INSERT` and `UPDATE` into a single call based on the primary key or unique key, making the code much cleaner.
 
 ---
 
-## 2. Vấn đề & Giải pháp tạm thời
+## 2. Issues & Temporary Solutions
 
-### Vấn đề thường gặp
-Khi xử lý lượng data lớn (ví dụ: 10,000 records), nếu không kiểm soát tốt cách thực thi, số lượng query có thể tăng vọt, gây ảnh hưởng nghiêm trọng đến hiệu suất hệ thống.
+### Common Problem
+When processing large amounts of data (e.g., 10,000 records), if the execution is not well-controlled, the number of queries can skyrocket, severely affecting system performance.
 
-### Giải pháp "Batching" (Tạm thời)
-Thay vì dùng `upsert` mặc định nếu cảm thấy nó chậm, chúng ta có thể tách thành 2 câu query lớn:
-1. **Batch Insert:** Lọc các ID chưa tồn tại và gộp lại để chèn một lần.
-2. **Batch Update:** Sử dụng cấu trúc `UPDATE...CASE...WHEN` để cập nhật đồng loạt các bản ghi cũ.
+### "Batching" Solution (Temporary)
+Instead of using the default `upsert` if it feels slow, we can split it into two large queries:
+1. **Batch Insert:** Filter IDs that don't exist in the DB and group them to insert at once.
+2. **Batch Update:** Use the `UPDATE...CASE...WHEN` structure to update existing records in bulk.
 
-**So sánh logic Update:**
-*   **Cách 1 (Nhiều query đơn):** `UPDATE table SET field = val WHERE id = x`. Hệ thống phải kiểm tra điều kiện $N$ lần cho $N$ bản ghi ($N^2$ checks).
-*   **Cách 2 (Một query gộp):** Sử dụng `CASE WHEN`. Hệ thống chỉ cần duyệt bảng một lần ($N$ lần check).
+**Update Logic Comparison:**
+*   **Method 1 (Multiple single queries):** `UPDATE table SET field = val WHERE id = x`. The system must check conditions $N$ times for $N$ records ($N^2$ checks).
+*   **Method 2 (One grouped query):** Using `CASE WHEN`. The system only needs to traverse the table once ($N$ checks).
 
 ---
 
-## 3. Phân tích Performance & Thực tế (Cập nhật mới)
+## 3. Performance Analysis & Reality (New Update)
 
-Qua quá trình test thực tế và đối sánh, chúng ta có những kết quả bất ngờ:
+Through actual testing and comparison, we've found some surprising results:
 
 > [!IMPORTANT]
-> **Kết quả Benchmark:**
-> 1. `upsert` mặc định của Laravel chạy **nhanh gấp 10 lần** so với cách dùng `UPDATE CASE WHEN`.
-> 2. `upsert` mặc định chạy **nhanh gấp đôi** so với cách sử dụng "Dynamic Temporary Table" (Join với block VALUES).
+> **Benchmark Results:**
+> 1. Laravel's default `upsert` runs **10 times faster** than using `UPDATE CASE WHEN`.
+> 2. Default `upsert` runs **twice as fast** as using "Dynamic Temporary Table" (Joining with a VALUES block).
 
-### Khi nào nên dùng Laravel Upsert?
-*   **Dữ liệu nhỏ (5-10 records):** Hiệu suất không chênh lệch đáng kể, dùng mặc định cho nhanh và tiện.
-*   **Dữ liệu lớn (Bulk Import):** Laravel `upsert` xử lý cực tốt vì nó đã hỗ trợ bulk insert/update trong một câu query duy nhất (nếu truyền vào array dữ liệu).
-*   **Hỗ trợ đa khóa:** Hoạt động tốt với cả Primary Key và Unique Key phức hợp (Composite keys).
+### When should you use Laravel Upsert?
+*   **Small datasets (5-10 records):** Performance difference is negligible; use the built-in feature for convenience.
+*   **Large datasets (Bulk Import):** Laravel's `upsert` performs exceptionally well because it supports bulk insert/update in a single query (if passed an array of data).
+*   **Multi-key support:** Works well with both Primary Keys and composite Unique Keys.
 
 ---
 
-## 4. Lưu ý & Tài nguyên bổ sung
+## 4. Notes & Additional Resources
 
-### Lưu ý kỹ thuật
-*   Hiện tại các Trait hỗ trợ chỉ mới được test ổn định trên **MySQL**.
-*   Các giải pháp tùy chỉnh (`SqlBulkUpdatable`, `wantsUpsertQuery`) đang hỗ trợ tối ưu cho 1 field cụ thể.
+### Technical Notes
+*   Currently, the support traits have only been stably tested on **MySQL**.
+*   Custom solutions (`SqlBulkUpdatable`, `wantsUpsertQuery`) currently support optimization for a single field.
 
-### Công cụ hỗ trợ
-Nếu bạn quan tâm đến việc tối ưu sâu hơn cho Batch Update, mình đã đóng gói một package tại đây:
+### Supporting Tools
+If you're interested in deeper optimization for Batch Updates, I've packaged a library here:
 👉 **[quanggpv/fast-batch-update](https://github.com/quanggpv/fast-batch-update)**
 
 ---
-*Cảm ơn các bạn đã đọc, hy vọng chia sẻ này giúp ích cho dự án của bạn!*
+*Thanks for reading, hope this share helps your project!*
